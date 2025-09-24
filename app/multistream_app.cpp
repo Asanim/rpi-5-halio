@@ -60,8 +60,8 @@ GST_DEBUG_CATEGORY (app_debug);
 //******************************************************************
 // Pipeline Macros
 //******************************************************************
-// get TAPPAS_WORKSPACE environment variable
-const std::string TAPPAS_WORKSPACE = getenv("TAPPAS_WORKSPACE");
+// get TAPPAS_WORKSPACE environment variable (with null check)
+const std::string TAPPAS_WORKSPACE = (getenv("TAPPAS_WORKSPACE") != nullptr) ? getenv("TAPPAS_WORKSPACE") : "";
 // get the app runtime directory
 const std::string APP_RUNTIME_DIR = getexepath();
 // Application specific macros
@@ -69,7 +69,7 @@ const std::string RESOURCES_DIR = APP_RUNTIME_DIR + "/resources";
 const std::string JSON_CONFIG_PATH = RESOURCES_DIR + "/yolov5.json";
 const std::string POSTPROCESS_SO = "/lib/aarch64-linux-gnu/hailo/tappas/post_processes/libyolo_post.so";
 const std::string STREAM_ID_SO = "/lib/aarch64-linux-gnu/hailo/tappas/post_processes/libstream_id_tool.so";
-const std::string HEF_PATH = APP_RUNTIME_DIR + "/../models/yolov11n.hef";
+const std::string HEF_PATH = APP_RUNTIME_DIR + "/models/yolov11n.hef";
 const std::string QUEUE = "queue leaky=no max-size-bytes=0 max-size-time=0 ";
 
 const std::string USB_SRC_0 = "/dev/video0";
@@ -251,6 +251,16 @@ std::string create_pipeline_string(cxxopts::ParseResult result, UserData* user_d
 
 int main(int argc, char *argv[])
 {
+    // Add debug logging for environment variables and paths
+    std::cout << "=== DEBUG INFO ===" << std::endl;
+    std::cout << "TAPPAS_WORKSPACE: '" << TAPPAS_WORKSPACE << "'" << std::endl;
+    std::cout << "APP_RUNTIME_DIR: '" << APP_RUNTIME_DIR << "'" << std::endl;
+    std::cout << "HEF_PATH: '" << HEF_PATH << "'" << std::endl;
+    std::cout << "JSON_CONFIG_PATH: '" << JSON_CONFIG_PATH << "'" << std::endl;
+    std::cout << "POSTPROCESS_SO: '" << POSTPROCESS_SO << "'" << std::endl;
+    std::cout << "STREAM_ID_SO: '" << STREAM_ID_SO << "'" << std::endl;
+    std::cout << "=================" << std::endl;
+
     // Set the GST_DEBUG_DUMP_DOT_DIR environment variable to dump a DOT file
     setenv("GST_DEBUG_DUMP_DOT_DIR", APP_RUNTIME_DIR.c_str(), 1);
         
@@ -294,16 +304,23 @@ int main(int argc, char *argv[])
 
     // create app data struct
     UserData user_data;
+    
+    std::cout << "Creating pipeline string..." << std::endl;
     // Create the pipeline
     std::string pipeline_string = create_pipeline_string(result, &user_data);
+    std::cout << "Pipeline string created successfully" << std::endl;
+    std::cout << "Pipeline string: " << pipeline_string << std::endl;
     
+    std::cout << "Parsing pipeline string..." << std::endl;
     // Parse the pipeline string and create the pipeline
     GError *err = nullptr;
     GstElement *pipeline = gst_parse_launch(pipeline_string.c_str(), &err);
     if (err){
         GST_ERROR("Failed to create pipeline: %s", err->message);
+        std::cout << "Pipeline creation failed: " << err->message << std::endl;
         exit(1);
     }
+    std::cout << "Pipeline created successfully" << std::endl;
 
     //connect source bins to the pipeline
     int num_of_src = result["num-of-src"].as<int>();
