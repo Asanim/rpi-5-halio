@@ -69,15 +69,20 @@ const std::string RESOURCES_DIR = APP_RUNTIME_DIR + "/resources";
 const std::string JSON_CONFIG_PATH = RESOURCES_DIR + "/yolov5.json";
 const std::string POSTPROCESS_SO = TAPPAS_WORKSPACE + "/apps/h8/gstreamer/libs/post_processes/libyolo_post.so";
 const std::string STREAM_ID_SO = TAPPAS_WORKSPACE + "/apps/h8/gstreamer/libs/post_processes/libstream_id_tool.so";
-const std::string HEF_PATH = TAPPAS_WORKSPACE + "/apps/h8/gstreamer/resources/hef/yolov5m_wo_spp_60p.hef";
+const std::string HEF_PATH = APP_RUNTIME_DIR + "/../models/yolov11n.hef";
 const std::string QUEUE = "queue leaky=no max-size-bytes=0 max-size-time=0 ";
+
+const std::string USB_SRC_0 = "/dev/video0";
+const std::string USB_SRC_1 = "/dev/video4";
+const std::string USB_SRC_2 = "/dev/video8";
+const std::string USB_SRC_3 = "/dev/video12";
+const std::string USB_SRC_4 = "/dev/video16";
 
 const std::string RTSP_SRC_0 = "rtsp://192.168.0.101/axis-media/media.amp/?h264x=4";
 const std::string RTSP_SRC_1 = "rtsp://192.168.0.102/axis-media/media.amp/?h264x=4";
 const std::string RTSP_SRC_2 = "rtsp://192.168.0.103/axis-media/media.amp/?h264x=4";
 const std::string RTSP_SRC_3 = "rtsp://192.168.0.104/axis-media/media.amp/?h264x=4";
 const std::string RTSP_SRC_4 = "rtsp://192.168.0.105/axis-media/media.amp/?h264x=4";
-
 
 const std::string URI_SRC_0 = "file:///local/workspace/tappas/apps/h8/gstreamer/resources/mp4/detection0.mp4";
 const std::string URI_SRC_1 = "file:///local/workspace/tappas/apps/h8/gstreamer/resources/mp4/detection1.mp4";
@@ -123,18 +128,22 @@ static GstPadProbeReturn pad_probe_cb(GstPad *pad, GstPadProbeInfo *info, gpoint
 }
 
 
-std::string create_sources(int num_of_src, std::string src_names[], bool use_rtsp=true, UserData* user_data=nullptr) {
+std::string create_sources(int num_of_src, std::string src_names[], int src_type=0, UserData* user_data=nullptr) {
     std::string result = "";
     for (int n = 0; n < num_of_src; n++) {
         // create the src bins
-        if (!use_rtsp) {
-            // input source is a video file
+        if (src_type == 0) {
+            // input source is a USB camera
             // Create the SrcBin and add it to the vector
-            user_data->src_bins.push_back(new SrcBin(SrcBin::SrcType::URI, src_names[n]));
-        } else {
+            user_data->src_bins.push_back(new SrcBin(SrcBin::SrcType::V4L2, src_names[n]));
+        } else if (src_type == 1) {
             // input source is a rtsp stream
             // Create the SrcBin and add it to the vector
             user_data->src_bins.push_back(new SrcBin(SrcBin::SrcType::RTSP, src_names[n]));
+        } else {
+            // input source is a video file
+            // Create the SrcBin and add it to the vector
+            user_data->src_bins.push_back(new SrcBin(SrcBin::SrcType::URI, src_names[n]));
         }
         // create additional pipeline elements
         result += QUEUE + "name=src_bin_out_q_" + std::to_string(n) + " max-size-buffers=3 ! ";
@@ -187,7 +196,7 @@ std::string create_pipeline_string(cxxopts::ParseResult result, UserData* user_d
     std::string video_sink_element = "xvimagesink";
     std::string sync_pipeline = "false";
     int num_of_src = result["num-of-src"].as<int>();
-    bool use_rtsp = false;
+    int src_type = 0; // 0=USB, 1=RTSP, 2=URI
     std::vector<std::string> src_names;
     // If required add hailodevicestats to pipeline
     if (result["hailo-stats"].as<bool>()) {
@@ -197,17 +206,20 @@ std::string create_pipeline_string(cxxopts::ParseResult result, UserData* user_d
         sync_pipeline = "true";
     }
     if (result["rtsp-src"].as<bool>()) {
-        use_rtsp = true;
+        src_type = 1;
         src_names = {RTSP_SRC_0, RTSP_SRC_1, RTSP_SRC_2, RTSP_SRC_3, RTSP_SRC_4};
-    } else {
-        use_rtsp = false;
+    } else if (result["uri-src"].as<bool>()) {
+        src_type = 2;
         src_names = {URI_SRC_0, URI_SRC_1, URI_SRC_2, URI_SRC_3, URI_SRC_4};
+    } else {
+        src_type = 0;
+        src_names = {USB_SRC_0, USB_SRC_1, USB_SRC_2, USB_SRC_3, USB_SRC_4};
     }
     // convert result["rr-mode"] from int to string
     std::string roundrobin_mode = std::to_string(result["rr-mode"].as<int>());
 
     // Create the pipeline string
-    pipeline_string += create_sources(num_of_src, src_names.data(), use_rtsp, user_data);
+    pipeline_string += create_sources(num_of_src, src_names.data(), src_type, user_data);
     pipeline_string += "hailoroundrobin name=roundroubin mode=" + roundrobin_mode + " ! ";
     pipeline_string += QUEUE + " name=roundrobin_q max-size-buffers=3 ! ";
     pipeline_string += "identity name=roundrobin_probe sync=true ! ";
@@ -259,6 +271,7 @@ int main(int argc, char *argv[])
     ("pts-probe", "Enables pts probes", cxxopts::value<bool>()->default_value("false"))
     ("pre-infer-probe", "Enables pre infer probe", cxxopts::value<bool>()->default_value("false"))
     ("rtsp-src", "Use RTSP sources", cxxopts::value<bool>()->default_value("false"))
+    ("uri-src", "Use URI/file sources", cxxopts::value<bool>()->default_value("false"))
     ("n, num-of-src", "Number of sources", cxxopts::value<int>()->default_value("2"))
     ("rr-mode", "Hailoroundrobin mode", cxxopts::value<int>()->default_value("2"))
     ("dump-dot-files", "Enables dumping of dot files", cxxopts::value<bool>()->default_value("false"));
@@ -389,9 +402,9 @@ int main(int argc, char *argv[])
         gst_debug_bin_to_dot_file(GST_BIN(pipeline), GST_DEBUG_GRAPH_SHOW_ALL, "pipeline_playing");
     }
 
-    // Set watchdog timers for each source (RTSP only) and start bus sync handler
+    // Set watchdog timers for each source (USB only) and start bus sync handler
     for (int n = 0; n < num_of_src; n++) {
-        if (user_data.src_bins[n]->type == SrcBin::SrcType::RTSP) {
+        if (user_data.src_bins[n]->type == SrcBin::SrcType::V4L2) {
             user_data.src_bins[n]->start_watchdog_thread();
         }
     }
