@@ -60,8 +60,6 @@ GST_DEBUG_CATEGORY (app_debug);
 //******************************************************************
 // Pipeline Macros
 //******************************************************************
-// get TAPPAS_WORKSPACE environment variable (with null check)
-const std::string TAPPAS_WORKSPACE = (getenv("TAPPAS_WORKSPACE") != nullptr) ? getenv("TAPPAS_WORKSPACE") : "";
 // get the app runtime directory
 const std::string APP_RUNTIME_DIR = getexepath();
 // Application specific macros
@@ -253,7 +251,6 @@ int main(int argc, char *argv[])
 {
     // Add debug logging for environment variables and paths
     std::cout << "=== DEBUG INFO ===" << std::endl;
-    std::cout << "TAPPAS_WORKSPACE: '" << TAPPAS_WORKSPACE << "'" << std::endl;
     std::cout << "APP_RUNTIME_DIR: '" << APP_RUNTIME_DIR << "'" << std::endl;
     std::cout << "HEF_PATH: '" << HEF_PATH << "'" << std::endl;
     std::cout << "JSON_CONFIG_PATH: '" << JSON_CONFIG_PATH << "'" << std::endl;
