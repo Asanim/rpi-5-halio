@@ -14,3 +14,6 @@ sudo apt install gnome
 # sudo apt install gdm3
 
 export DISPLAY=:0
+
+cd models/
+wget https://hailo-model-zoo.s3.eu-west-2.amazonaws.com/ModelZoo/Compiled/v2.16.0/hailo8/yolov5m_wo_spp.hef

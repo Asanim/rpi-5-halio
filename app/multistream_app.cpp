@@ -69,7 +69,7 @@ const std::string RESOURCES_DIR = APP_RUNTIME_DIR + "/resources";
 const std::string JSON_CONFIG_PATH = RESOURCES_DIR + "/yolov5.json";
 const std::string POSTPROCESS_SO = "/lib/aarch64-linux-gnu/hailo/tappas/post_processes/libyolo_post.so";
 const std::string STREAM_ID_SO = "/lib/aarch64-linux-gnu/hailo/tappas/post_processes/libstream_id_tool.so";
-const std::string HEF_PATH = APP_RUNTIME_DIR + "/models/yolov11n.hef";
+const std::string HEF_PATH = APP_RUNTIME_DIR + "/models/yolov5m_wo_spp.hef";
 const std::string QUEUE = "queue leaky=no max-size-bytes=0 max-size-time=0 ";
 
 const std::string USB_SRC_0 = "/dev/video0";
