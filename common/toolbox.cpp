@@ -320,20 +320,24 @@ void preprocess_multicamera_frames(std::vector<CameraInfo> &cameras,
                                  std::shared_ptr<BoundedTSQueue<std::pair<std::vector<cv::Mat>, std::vector<cv::Mat>>>> preprocessed_batch_queue,
                                  PreprocessCallback preprocess_callback) {
     
-    // Initialize cameras
+    // Initialize cameras with optimal settings for latest frame capture
     for (auto& camera : cameras) {
         camera.capture.open(camera.device_id, cv::CAP_V4L2);
         if (!camera.capture.isOpened()) {
             std::cerr << "Failed to open camera " << camera.device_id << std::endl;
             camera.is_working = false;
         } else {
-            // Set buffer size to 1 to get latest frame
-            camera.capture.set(cv::CAP_PROP_BUFFERSIZE, 1);
+            // Critical settings for getting latest frames
+            camera.capture.set(cv::CAP_PROP_BUFFERSIZE, 1);  // Minimal buffering
+            camera.capture.set(cv::CAP_PROP_FPS, 30);        // Set consistent FPS
+            
+            std::cout << "Camera " << camera.device_id << " initialized successfully" << std::endl;
         }
     }
     
     std::vector<cv::Mat> org_frames;
     std::vector<cv::Mat> preprocessed_frames;
+    int frame_cycle = 0;
     
     while (true) {
         bool any_camera_working = false;
@@ -343,34 +347,51 @@ void preprocess_multicamera_frames(std::vector<CameraInfo> &cameras,
             if (!camera.is_working) continue;
             
             cv::Mat org_frame;
-            // Grab and retrieve to get latest frame (discard buffered frames)
-            if (camera.capture.grab()) {
-                camera.capture.retrieve(org_frame);
-                if (!org_frame.empty()) {
-                    org_frames.push_back(org_frame.clone());
-                    any_camera_working = true;
+            
+            // Advanced frame discarding technique: flush buffer then get latest
+            bool frame_captured = false;
+            for (int flush_attempts = 0; flush_attempts < 3; ++flush_attempts) {
+                if (camera.capture.grab()) {
+                    frame_captured = true;
+                } else {
+                    break;  // Camera failed
                 }
-            } else {
-                camera.is_working = false;
-                std::cout << "Camera " << camera.device_id << " stopped working" << std::endl;
             }
             
-            // Process batch when we have enough frames or reach max cameras
+            if (frame_captured && camera.capture.retrieve(org_frame) && !org_frame.empty()) {
+                org_frames.push_back(org_frame.clone());
+                any_camera_working = true;
+                
+                // Optional: Add camera ID as metadata (for debugging)
+                // std::cout << "Frame from camera " << camera.device_id << " (" << org_frame.cols << "x" << org_frame.rows << ")" << std::endl;
+            } else {
+                camera.is_working = false;
+                std::cout << "Camera " << camera.device_id << " stopped working or failed to capture" << std::endl;
+            }
+            
+            // Process batch when we have enough frames
             if (org_frames.size() == batch_size) {
                 preprocessed_frames.clear();
                 preprocess_callback(org_frames, preprocessed_frames, width, height);
                 preprocessed_batch_queue->push(std::make_pair(org_frames, preprocessed_frames));
                 org_frames.clear();
+                frame_cycle++;
+                
+                if (frame_cycle % 30 == 0) {  // Progress indicator every ~1 second
+                    std::cout << "Processed " << frame_cycle << " batches from " << cameras.size() << " cameras" << std::endl;
+                }
             }
         }
         
         // If no cameras are working, exit
         if (!any_camera_working) {
+            std::cout << "No cameras working, stopping multi-camera preprocessing" << std::endl;
             break;
         }
         
-        // Small delay to prevent CPU overload
-        std::this_thread::sleep_for(std::chrono::milliseconds(33)); // ~30 FPS
+        // Adaptive delay based on number of cameras (prevent CPU overload)
+        int delay_ms = std::max(10, 33 / (int)cameras.size());  // Scale delay by camera count
+        std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
     }
     
     // Process remaining frames if any
@@ -378,6 +399,7 @@ void preprocess_multicamera_frames(std::vector<CameraInfo> &cameras,
         preprocessed_frames.clear();
         preprocess_callback(org_frames, preprocessed_frames, width, height);
         preprocessed_batch_queue->push(std::make_pair(org_frames, preprocessed_frames));
+        std::cout << "Processed final batch with " << org_frames.size() << " remaining frames" << std::endl;
     }
     
     preprocessed_batch_queue->stop();
@@ -386,6 +408,7 @@ void preprocess_multicamera_frames(std::vector<CameraInfo> &cameras,
     for (auto& camera : cameras) {
         if (camera.capture.isOpened()) {
             camera.capture.release();
+            std::cout << "Released camera " << camera.device_id << std::endl;
         }
     }
 }
@@ -479,9 +502,19 @@ hailo_status run_multicamera_post_process(
     std::shared_ptr<BoundedTSQueue<InferenceResult>> results_queue,
     PostprocessCallback postprocess_callback) {
     
+    // Create windows for each camera
+    for (const auto& camera : cameras) {
+        cv::namedWindow(camera.window_name, cv::WINDOW_AUTOSIZE);
+        cv::moveWindow(camera.window_name, (camera.device_id % 3) * 320, (camera.device_id / 3) * 240);
+    }
+    
     // Track which camera each result belongs to
     int camera_index = 0;
     int result_count = 0;
+    auto last_fps_time = std::chrono::high_resolution_clock::now();
+    int fps_counter = 0;
+    
+    std::cout << "Multi-camera post-processing started. Press 'q' in any window to exit." << std::endl;
     
     while (true) {
         InferenceResult output_item;
@@ -501,23 +534,44 @@ hailo_status run_multicamera_post_process(
         if (camera_index < cameras.size()) {
             window_name = cameras[camera_index].window_name;
         } else {
-            window_name = "Camera " + std::to_string(camera_index);
+            window_name = "Camera " + std::to_string(camera_index % cameras.size());
         }
+        
+        // Add camera info overlay
+        cv::putText(frame_to_draw, 
+                   "Cam " + std::to_string(camera_index % cameras.size()),
+                   cv::Point(10, 30), 
+                   cv::FONT_HERSHEY_SIMPLEX, 
+                   1.0, 
+                   cv::Scalar(0, 255, 0), 
+                   2);
         
         cv::imshow(window_name, frame_to_draw);
         
         // Cycle through cameras for display
         camera_index = (camera_index + 1) % cameras.size();
         result_count++;
+        fps_counter++;
         
-        // Check for 'q' key press to exit
-        if (cv::waitKey(1) == 'q') {
-            std::cout << "Exiting multi-camera inference..." << std::endl;
+        // Calculate and display FPS every second
+        auto current_time = std::chrono::high_resolution_clock::now();
+        auto time_diff = std::chrono::duration_cast<std::chrono::seconds>(current_time - last_fps_time);
+        if (time_diff.count() >= 1) {
+            std::cout << "Multi-camera FPS: " << fps_counter << " | Total frames processed: " << result_count << std::endl;
+            fps_counter = 0;
+            last_fps_time = current_time;
+        }
+        
+        // Check for 'q' key press to exit (non-blocking)
+        int key = cv::waitKey(1) & 0xFF;
+        if (key == 'q' || key == 'Q' || key == 27) {  // 'q', 'Q', or ESC
+            std::cout << "Exiting multi-camera inference... Total frames processed: " << result_count << std::endl;
             break;
         }
     }
     
     cv::destroyAllWindows();
+    std::cout << "Multi-camera post-processing completed successfully." << std::endl;
     return HAILO_SUCCESS;
 }
 

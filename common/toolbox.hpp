@@ -34,6 +34,54 @@
 extern std::vector<cv::Scalar> COLORS;
 namespace fs = std::filesystem;
 namespace hailo_utils {
+
+template<typename T>
+class BoundedTSQueue {
+private:
+    std::queue<T> m_queue;
+    std::mutex m_mutex;
+    std::condition_variable m_cond_not_empty;
+    std::condition_variable m_cond_not_full;
+    const size_t m_max_size;
+    bool m_stopped;
+
+public:
+    explicit BoundedTSQueue(size_t max_size) : m_max_size(max_size), m_stopped(false) {}
+    ~BoundedTSQueue() { stop(); }
+
+    BoundedTSQueue(const BoundedTSQueue&) = delete;
+    BoundedTSQueue& operator=(const BoundedTSQueue&) = delete;
+
+    void push(const T& item) {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        m_cond_not_full.wait(lock, [this] { return m_queue.size() < m_max_size || m_stopped; });
+        if (m_stopped) return;
+        m_queue.push(item);
+        m_cond_not_empty.notify_one();
+    }
+
+    bool pop(T& item) {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        m_cond_not_empty.wait(lock, [this] { return !m_queue.empty() || m_stopped; });
+        if (m_stopped && m_queue.empty()) return false;
+        item = m_queue.front();
+        m_queue.pop();
+        m_cond_not_full.notify_one();
+        return true;
+    }
+
+    void stop() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_stopped = true;
+        m_cond_not_empty.notify_all();
+        m_cond_not_full.notify_all();
+    }
+
+    bool empty() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_queue.empty();
+    }
+};
     
 struct InferenceResult {
     cv::Mat org_frame;
@@ -85,8 +133,17 @@ std::string get_hef_name(const std::string &path);
 InputType determine_input_type(const std::string &input_path, cv::VideoCapture &capture,
     double &org_height, double &org_width, size_t &frame_count, size_t batch_size);
 
-// Camera enumeration
+// Camera enumeration and multi-camera functions
 std::vector<CameraInfo> enumerate_usb_cameras();
+void preprocess_multicamera_frames(std::vector<CameraInfo> &cameras,
+                                 uint32_t width, uint32_t height, size_t batch_size,
+                                 std::shared_ptr<BoundedTSQueue<std::pair<std::vector<cv::Mat>, std::vector<cv::Mat>>>> preprocessed_batch_queue,
+                                 PreprocessCallback preprocess_callback);
+hailo_status run_multicamera_post_process(
+    const std::vector<CameraInfo> &cameras,
+    size_t batch_size,
+    std::shared_ptr<BoundedTSQueue<InferenceResult>> results_queue,
+    PostprocessCallback postprocess_callback);
 
 // CLI
 std::string getCmdOption(int argc, char *argv[], const std::string &option);
@@ -113,60 +170,6 @@ cv::VideoCapture open_video_capture(const std::string &input_path, cv::VideoCapt
                                     double &org_height, double &org_width, size_t &rame_count);
 bool show_frame(const InputType &input_type, const cv::Mat &frame_to_draw);
 
-template<typename T>
-class BoundedTSQueue {
-private:
-    std::queue<T> m_queue;
-    std::mutex m_mutex;
-    std::condition_variable m_cond_not_empty;
-    std::condition_variable m_cond_not_full;
-    const size_t m_max_size;
-    bool m_stopped;
-
-public:
-    explicit BoundedTSQueue(size_t max_size) : m_max_size(max_size), m_stopped(false) {}
-    ~BoundedTSQueue() { stop(); }
-
-    BoundedTSQueue(const BoundedTSQueue&) = delete;
-    BoundedTSQueue& operator=(const BoundedTSQueue&) = delete;
-
-    void push(T item) {
-        std::unique_lock<std::mutex> lock(m_mutex);
-        m_cond_not_full.wait(lock, [this] { return m_queue.size() < m_max_size || m_stopped; });
-        if (m_stopped) return;
-
-        m_queue.push(std::move(item));
-        m_cond_not_empty.notify_one();
-    }
-
-    bool pop(T &out_item) {
-        std::unique_lock<std::mutex> lock(m_mutex);
-        m_cond_not_empty.wait(lock, [this] { return !m_queue.empty() || m_stopped; });
-        if (m_stopped && m_queue.empty()) {
-            return false;
-        }
-
-        out_item = std::move(m_queue.front());
-        m_queue.pop();
-        m_cond_not_full.notify_one();
-        return true;
-    }
-
-    void stop() {
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            m_stopped = true;
-        }
-        m_cond_not_empty.notify_all();
-        m_cond_not_full.notify_all();
-    }
-
-    bool empty() const {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        return m_queue.empty();
-    }
-};
-
 // ─────────────────────────────────────────────────────────────────────────────
 // GENERIC PRE/POST PROCESSING FUNCTIONS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -176,11 +179,6 @@ void preprocess_video_frames(cv::VideoCapture &capture,
                           uint32_t width, uint32_t height, size_t batch_size,
                           std::shared_ptr<BoundedTSQueue<std::pair<std::vector<cv::Mat>, std::vector<cv::Mat>>>> preprocessed_batch_queue,
                           PreprocessCallback preprocess_callback);
-
-void preprocess_multicamera_frames(std::vector<CameraInfo> &cameras,
-                                 uint32_t width, uint32_t height, size_t batch_size,
-                                 std::shared_ptr<BoundedTSQueue<std::pair<std::vector<cv::Mat>, std::vector<cv::Mat>>>> preprocessed_batch_queue,
-                                 PreprocessCallback preprocess_callback);
 
 void preprocess_image_frames(const std::string &input_path,
                           uint32_t width, uint32_t height, size_t batch_size,
@@ -200,12 +198,6 @@ hailo_status run_post_process(
     size_t frame_count,
     cv::VideoCapture &capture,
     double fps,
-    size_t batch_size,
-    std::shared_ptr<BoundedTSQueue<InferenceResult>> results_queue,
-    PostprocessCallback postprocess_callback);
-
-hailo_status run_multicamera_post_process(
-    const std::vector<CameraInfo> &cameras,
     size_t batch_size,
     std::shared_ptr<BoundedTSQueue<InferenceResult>> results_queue,
     PostprocessCallback postprocess_callback);
