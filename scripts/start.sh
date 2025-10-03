@@ -1,4 +1,6 @@
+export GST_DEBUG="*:3"
 export DISPLAY=:0
 cd ~/hailo-rpi5-examples
 source setup_env.sh
-python basic_pipelines/multi_instance_detection.py
+cd ~/rpi-5-halio-pwm
+./multistream_app --input-0 /dev/video0 --input-1
