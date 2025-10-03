@@ -2,3 +2,10 @@ examples/
 models/
 hailort.log
 multistream_app
+*.mp4
+*.git
+*.jpg
+*.hef
+*.gif
+
+build/
