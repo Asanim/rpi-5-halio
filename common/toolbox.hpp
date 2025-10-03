@@ -49,6 +49,15 @@ struct InputType {
     bool is_camera = false;
 };
 
+struct CameraInfo {
+    int device_id;
+    cv::VideoCapture capture;
+    std::string window_name;
+    bool is_working;
+    double width;
+    double height;
+};
+
 struct CommandLineArgs {
     std::string detection_hef;
     std::string input_path;
@@ -75,6 +84,9 @@ std::string get_hef_name(const std::string &path);
 
 InputType determine_input_type(const std::string &input_path, cv::VideoCapture &capture,
     double &org_height, double &org_width, size_t &frame_count, size_t batch_size);
+
+// Camera enumeration
+std::vector<CameraInfo> enumerate_usb_cameras();
 
 // CLI
 std::string getCmdOption(int argc, char *argv[], const std::string &option);
@@ -165,6 +177,11 @@ void preprocess_video_frames(cv::VideoCapture &capture,
                           std::shared_ptr<BoundedTSQueue<std::pair<std::vector<cv::Mat>, std::vector<cv::Mat>>>> preprocessed_batch_queue,
                           PreprocessCallback preprocess_callback);
 
+void preprocess_multicamera_frames(std::vector<CameraInfo> &cameras,
+                                 uint32_t width, uint32_t height, size_t batch_size,
+                                 std::shared_ptr<BoundedTSQueue<std::pair<std::vector<cv::Mat>, std::vector<cv::Mat>>>> preprocessed_batch_queue,
+                                 PreprocessCallback preprocess_callback);
+
 void preprocess_image_frames(const std::string &input_path,
                           uint32_t width, uint32_t height, size_t batch_size,
                           std::shared_ptr<BoundedTSQueue<std::pair<std::vector<cv::Mat>, std::vector<cv::Mat>>>> preprocessed_batch_queue,
@@ -183,6 +200,12 @@ hailo_status run_post_process(
     size_t frame_count,
     cv::VideoCapture &capture,
     double fps,
+    size_t batch_size,
+    std::shared_ptr<BoundedTSQueue<InferenceResult>> results_queue,
+    PostprocessCallback postprocess_callback);
+
+hailo_status run_multicamera_post_process(
+    const std::vector<CameraInfo> &cameras,
     size_t batch_size,
     std::shared_ptr<BoundedTSQueue<InferenceResult>> results_queue,
     PostprocessCallback postprocess_callback);

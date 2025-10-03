@@ -56,6 +56,64 @@ int main(int argc, char** argv)
     CommandLineArgs args = parse_command_line_arguments(argc, argv);
     auto batch_size = std::stoi(args.batch_size);
     HailoInfer model(args.detection_hef, batch_size);
+    
+    // Check if multi-camera mode should be used
+    bool use_multicamera = args.input_path.empty() || args.input_path == "multicamera";
+    
+    if (use_multicamera) {
+        std::cout << "Enumerating USB cameras..." << std::endl;
+        auto cameras = enumerate_usb_cameras();
+        
+        if (cameras.empty()) {
+            std::cerr << "No USB cameras found!" << std::endl;
+            return -1;
+        }
+        
+        std::cout << "Found " << cameras.size() << " camera(s), starting multi-camera inference..." << std::endl;
+        
+        // Create a mutable copy for the preprocessing function
+        auto mutable_cameras = cameras;
+        
+        auto preprocess_thread = std::async(std::launch::async, [&]() {
+            auto model_input_shape = model.get_infer_model()->hef().get_input_vstream_infos().release()[0].shape;
+            print_net_banner(get_hef_name(args.detection_hef), std::ref(model.get_inputs()), std::ref(model.get_outputs()));
+            
+            preprocess_multicamera_frames(mutable_cameras,
+                                        model_input_shape.width, 
+                                        model_input_shape.height, 
+                                        batch_size,
+                                        preprocessed_batch_queue,
+                                        preprocess_callback);
+            return HAILO_SUCCESS;
+        });
+
+        auto inference_thread = std::async(run_inference_async,
+                                        std::ref(model),
+                                        std::ref(inference_time),
+                                        preprocessed_batch_queue,
+                                        results_queue);
+
+        auto output_parser_thread = std::async(run_multicamera_post_process,
+                                    std::cref(cameras),
+                                    batch_size,
+                                    results_queue,
+                                    postprocess_callback);
+
+        hailo_status status = wait_and_check_threads(
+            preprocess_thread,    "Preprocess",
+            inference_thread,     "Inference",
+            output_parser_thread, "Postprocess"
+        );
+        
+        if (HAILO_SUCCESS != status) {
+            return status;
+        }
+        
+        std::cout << "Multi-camera inference completed successfully!" << std::endl;
+        return HAILO_SUCCESS;
+    }
+    
+    // Original single input processing
     input_type = determine_input_type(args.input_path, std::ref(capture), org_height, org_width, frame_count, batch_size);
 
     auto preprocess_thread = std::async(run_preprocess,
