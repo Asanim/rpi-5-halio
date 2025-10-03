@@ -11,7 +11,7 @@ std::vector<CameraInfo> enumerate_usb_cameras() {
     std::vector<CameraInfo> cameras;
     
     // Check for video devices in /dev/
-    for (int i = 0; i < 10; ++i) {
+    for (int i = 0; i < 35; ++i) {
         std::string device_path = "/dev/video" + std::to_string(i);
         struct stat st;
         
